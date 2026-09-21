@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {createProject,read,revise,authorize,advance,git,workspace,locked,applyAnalysis,answerQuestions,confirmRequirements,confirmDocument,checkpoint,setPlan,checkRevision,dataRoot} from '../lib/store';
+import {createProject,read,revise,authorize,advance,git,workspace,locked,applyAnalysis,answerQuestions,confirmRequirements,confirmDocument,checkpoint,setPlan,checkRevision,dataRoot,setArchived} from '../lib/store';
 import {parseUpload} from '../lib/upload';
 import {guard} from '../lib/http';
 import {recover,applyJobResult,promptFor} from '../lib/runner';
@@ -32,3 +32,32 @@ test('原有项目迁移保留文件、文档和书签，不把旧模板当已�
 test('上传校验拒绝空文件、假 PDF、二进制文本和不支持格式',async()=>{for(const file of[new File([],'empty.md'),new File(['invalid pdf'],'fake.pdf'),new File(['abc\0binary'],'bad.txt'),new File(['script'],'bad.exe')])await assert.rejects(()=>parseUpload(file));const valid=await parseUpload(new File([prd],'../../需求.md'));assert.equal(valid.filename.includes('/'),false);});
 test('真实 PDF 和 DOCX 可提取正文',async()=>{for(const ext of['pdf','docx']){const bytes=await fs.readFile(path.join(process.cwd(),'tests/fixtures',`valid.${ext}`));const result=await parseUpload(new File([bytes],`valid.${ext}`));assert.match(result.text,/knowledge cards/);}});
 test('API 限制本机同源请求与专用请求头',()=>{assert.throws(()=>guard(new Request('http://127.0.0.1:3100/api/projects',{headers:{host:'attacker.example'}})),/本机访问/);assert.throws(()=>guard(new Request('http://127.0.0.1:3100/api/projects',{headers:{host:'127.0.0.1:3100',origin:'https://attacker.example','x-studio-request':'1'}}),true),/不受信任/);assert.throws(()=>guard(new Request('http://127.0.0.1:3100/api/projects',{headers:{host:'127.0.0.1:3100'}}),true),/工作台发起/);});
+test('归档保留真实代码书签和审批，重读后禁止开发，恢复后可从原步骤继续',async()=>{
+ const p=await developReady();
+ const before=structuredClone(p);const head=await git(p.id,['rev-parse','HEAD']);
+ await setArchived(p,true);
+ let restored=await read(p.id);
+ assert.ok(restored.archivedAt);assert.equal(restored.workflow,'ready');
+ assert.deepEqual(restored.documents,before.documents);assert.deepEqual(restored.approvals,before.approvals);assert.deepEqual(restored.bookmarks,before.bookmarks);
+ await assert.rejects(()=>authorize(restored,restored.version,restored.docHash,restored.bookmarks[0].id),/已归档/);
+ await setArchived(restored,false);restored=await read(p.id);
+ assert.equal(restored.archivedAt,null);assert.equal(restored.workflow,'ready');assert.equal(restored.status,'waiting');
+ assert.equal(await git(p.id,['rev-parse','HEAD']),head);
+ await authorize(restored,restored.version,restored.docHash,restored.bookmarks[0].id);assert.equal(restored.workflow,'development');
+});
+test('归档一个软件不改变其他软件，运行中的任务不能归档',async()=>{
+ const first=await createProject('软件甲.md',prd);const second=await developReady();
+ const firstBefore=await read(first.id);
+ await authorize(second,second.version,second.docHash,second.bookmarks[0].id);
+ await assert.rejects(()=>setArchived(second,true),/任务正在运行/);
+ await setArchived(first,true);
+ const secondAfter=await read(second.id);assert.equal(secondAfter.archivedAt,null);assert.equal(secondAfter.workflow,'development');
+ await setArchived(await read(first.id),false);
+ const firstAfter=await read(first.id);assert.equal(firstAfter.workflow,firstBefore.workflow);assert.equal(firstAfter.prd,firstBefore.prd);
+ assert.equal(firstAfter.job,null);assert.equal(firstAfter.bookmarks.length,0);
+});
+test('已有版本 2 项目缺少归档字段时仍保留全部数据并默认为未归档',async()=>{
+ const p=await documentReady();const legacy:Partial<Project>={...p};delete legacy.archivedAt;
+ await fs.writeFile(path.join(dataRoot(),'state',`${p.id}.json`),JSON.stringify(legacy));
+ const loaded=await read(p.id);assert.equal(loaded.archivedAt,null);assert.deepEqual(loaded.documents,p.documents);assert.equal(loaded.workflow,'document');
+});

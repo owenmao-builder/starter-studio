@@ -17,6 +17,7 @@ export interface Activity { id: string; title: string; detail: string; time: str
 export interface PlanRecord { round: number; stage: number; version: number; document: string; docHash: string; createdAt: string }
 export interface Project {
  schemaVersion: 2; id: string; name: string; filename: string; prd: string; createdAt: string; updatedAt: string; revision: number;
+ archivedAt: string | null;
  stage: number; round: number; workflow: Workflow; status: Status; job: JobKind | null;
  document: string; version: number; docHash: string; reviewTree: string;
  questions: Question[]; interview: Interview[]; interviewTurn: number; requirementSummary: string; requirementsHash: string; requirementsConfirmedAt: string | null;

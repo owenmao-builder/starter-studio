@@ -1,6 +1,7 @@
 import {test,beforeEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {previewApi} from '../lib/preview-api';
+import {resolveNavigation,navigationURL,readNavigation} from '../lib/navigation';
 const store=new Map<string,string>();
 Object.defineProperty(globalThis,'localStorage',{value:{getItem:(key:string)=>store.get(key)??null,setItem:(key:string,value:string)=>{store.set(key,value);}},configurable:true});
 beforeEach(()=>store.clear());
@@ -25,4 +26,39 @@ test('公开预览明确拒绝需要服务端解析的文件，不伪称支持 P
  await assert.rejects(()=>previewApi.upload(new File(['text'],'file.pdf')),/本机完整版/);
  await assert.rejects(()=>previewApi.upload(new File(['\0binary'],'file.txt')),/有效的文本/);
  assert.equal((await previewApi.list()).runner.available,false);
+});
+test('多个演示项目独立推进；归档持久化、禁止跳步，恢复后保留确认与书签',async()=>{
+ let first=await previewApi.upload(prd);const second=await previewApi.upload(new File(['# 软件乙\n第二个独立软件'],'second.md'));
+ const act=async(action:string,values:Record<string,unknown>={})=>{first=await previewApi.action(first.id,{action,revision:first.revision,...values});};
+ await act('answer',{answers:{audience:'内部'}});
+ await act('confirm_requirements',{confirmed:true,requirementsHash:first.requirementsHash});
+ await act('confirm_document',{confirmed:true,version:first.version,docHash:first.docHash});await act('bookmark');
+ const before=structuredClone(first);
+ await act('archive');assert.ok((await previewApi.get(first.id)).archivedAt);
+ await assert.rejects(()=>act('develop',{confirmed:true,version:first.version,docHash:first.docHash,bookmarkId:first.bookmarks[0].id}),/已归档/);
+ assert.deepEqual(await previewApi.get(second.id),second);
+ await act('restore');assert.equal(first.archivedAt,null);assert.equal(first.workflow,'ready');assert.equal(first.result,null);
+ assert.deepEqual(first.documents,before.documents);assert.deepEqual(first.approvals,before.approvals);assert.deepEqual(first.bookmarks,before.bookmarks);
+ await act('develop',{confirmed:true,version:first.version,docHash:first.docHash,bookmarkId:first.bookmarks[0].id});assert.equal(first.workflow,'review');
+ assert.equal((await previewApi.get(second.id)).workflow,'questions');
+});
+test('查看其他项目记录不切换当前搭建；刷新、旧链接、新建页和归档直达均正确恢复',async()=>{
+ const first=await previewApi.upload(prd);let second=await previewApi.upload(new File(['# 软件乙\n第二个独立软件'],'second.md'));
+ let projects=(await previewApi.list()).projects;
+ assert.deepEqual(resolveNavigation(projects,`?view=history&project=${second.id}`,first.id),{view:'history',projectId:second.id,currentId:first.id});
+ assert.equal(resolveNavigation(projects,'',first.id).projectId,first.id);
+ assert.equal(resolveNavigation(projects,`?project=${second.id}`,first.id).currentId,second.id);
+ assert.deepEqual(resolveNavigation(projects,'?new=1',first.id),{view:'flow',projectId:null,currentId:first.id});
+ assert.equal(readNavigation('?view=projects').view,'history');
+ assert.equal(navigationURL('/starter-studio/','archive'),'/starter-studio/?view=archive');
+ second=await previewApi.action(second.id,{action:'archive',revision:second.revision});projects=(await previewApi.list()).projects;
+ assert.deepEqual(resolveNavigation(projects,`?project=${second.id}`,first.id),{view:'archive',projectId:second.id,currentId:first.id});
+ assert.equal(resolveNavigation(projects,'',second.id).currentId,first.id);
+ const archivedFirst=await previewApi.action(first.id,{action:'archive',revision:first.revision});
+ assert.deepEqual(resolveNavigation([archivedFirst,second],'',first.id),{view:'flow',projectId:null,currentId:null});
+});
+test('浏览器旧项目无需清空存储即可继续使用',async()=>{
+ const p=await previewApi.upload(prd);const old:{archivedAt?:string|null}={...p};delete old.archivedAt;
+ store.set('starter-studio-public-preview-v1',JSON.stringify([old]));
+ assert.equal((await previewApi.get(p.id)).archivedAt,null);assert.equal((await previewApi.get(p.id)).prd,p.prd);
 });

@@ -2,13 +2,15 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
-import { AppError,read,locked,revise,advance,workspace,checkRevision,answerQuestions,supplement,confirmRequirements,confirmDocument,checkpoint,requestRevision } from '@/lib/store';
+import { AppError,read,locked,revise,advance,workspace,checkRevision,answerQuestions,supplement,confirmRequirements,confirmDocument,checkpoint,requestRevision,setArchived,requireActive } from '@/lib/store';
 import { start,cancel,recover,startAnalysis,startPlanning } from '@/lib/runner';
 import { guard,errorResponse } from '@/lib/http';
 const exec=promisify(execFile);
 export const runtime='nodejs';export const dynamic='force-dynamic';
 const revision={revision:z.number().int().nonnegative()};
 const schema=z.discriminatedUnion('action',[
+ z.object({action:z.literal('archive'),...revision}),
+ z.object({action:z.literal('restore'),...revision}),
  z.object({action:z.literal('analyze'),...revision}),
  z.object({action:z.literal('answer'),answers:z.record(z.string(),z.string().min(1).max(5000)),...revision}),
  z.object({action:z.literal('supplement'),note:z.string().min(1).max(10000),...revision}),
@@ -24,7 +26,9 @@ const schema=z.discriminatedUnion('action',[
 ]);
 type Context={params:Promise<{id:string}>};
 export async function GET(request:Request,{params}:Context){try{guard(request);const{id}=await params;const p=await recover(await read(id));const bookmarkId=new URL(request.url).searchParams.get('bookmark');if(bookmarkId){const bookmark=p.bookmarks.find(b=>b.id===bookmarkId);if(!bookmark)throw new AppError('NOT_FOUND','书签不存在',404);const{stdout}=await exec('git',['archive','--format=tar',bookmark.commit],{cwd:workspace(id),encoding:'buffer',maxBuffer:100*1024*1024,timeout:30000});return new Response(new Uint8Array(stdout),{headers:{'Content-Type':'application/x-tar','Content-Disposition':`attachment; filename="bookmark-${bookmark.commit.slice(0,7)}.tar"`}});}return NextResponse.json(p);}catch(e){return errorResponse(e);}}
-export async function POST(request:Request,{params}:Context){try{guard(request,true);const{id}=await params;const input=schema.parse(await request.json());return NextResponse.json(await locked(id,async()=>{const p=await read(id);checkRevision(p,input.revision);switch(input.action){
+export async function POST(request:Request,{params}:Context){try{guard(request,true);const{id}=await params;const input=schema.parse(await request.json());return NextResponse.json(await locked(id,async()=>{const p=await read(id);checkRevision(p,input.revision);if(input.action!=='archive'&&input.action!=='restore')requireActive(p);switch(input.action){
+ case'archive':return setArchived(p,true);
+ case'restore':return setArchived(p,false);
  case'analyze':return startAnalysis(p);
  case'answer':await answerQuestions(p,input.answers);return startAnalysis(p);
  case'supplement':await supplement(p,input.note);return startAnalysis(p);

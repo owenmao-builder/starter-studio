@@ -20,11 +20,11 @@ export async function save(p: Project) {
  await fs.writeFile(temp, JSON.stringify(p, null, 2), { mode: 0o600 });
  await fs.rename(temp, stateFile(p.id));
 }
-function defaults() {return {schemaVersion:2 as const,revision:0,stage:2,round:1,workflow:'questions' as const,status:'waiting' as const,job:null,document:'',version:0,docHash:'',reviewTree:'',questions:[],interview:[],interviewTurn:0,requirementSummary:'',requirementsHash:'',requirementsConfirmedAt:null,planningFeedback:'',bookmarks:[],approvals:[],activities:[],documents:[],lastRoundResult:null,result:null,error:null};}
+function defaults() {return {schemaVersion:2 as const,archivedAt:null,revision:0,stage:2,round:1,workflow:'questions' as const,status:'waiting' as const,job:null,document:'',version:0,docHash:'',reviewTree:'',questions:[],interview:[],interviewTurn:0,requirementSummary:'',requirementsHash:'',requirementsConfirmedAt:null,planningFeedback:'',bookmarks:[],approvals:[],activities:[],documents:[],lastRoundResult:null,result:null,error:null};}
 export async function read(id: string): Promise<Project> {
  let raw: Project;
  try {raw=JSON.parse(await fs.readFile(stateFile(id),'utf8'));} catch(e){if(e instanceof AppError)throw e;throw new AppError('NOT_FOUND','项目不存在',404);}
- if(raw.schemaVersion===2)return {...raw,lastRoundResult:raw.lastRoundResult??null};
+ if(raw.schemaVersion===2)return {...raw,archivedAt:raw.archivedAt??null,lastRoundResult:raw.lastRoundResult??null};
  // Keep the previous files and history. A legacy template is not a confirmed requirement.
  return { ...raw,...defaults(),bookmarks:(raw.bookmarks||[]).map(b=>({...b,round:1})),documents:raw.document?[{round:1,stage:raw.stage,version:raw.version,document:raw.document,docHash:raw.docHash,createdAt:raw.updatedAt}]:[],activities:[{id:'workflow-migration',title:'已切换为顺序流程',detail:'原有文件与书签已保留在项目记录。先澄清并确认需求，再生成新的技术文档。',time:new Date().toISOString(),kind:'info'},...(raw.activities||[])] };
 }
@@ -38,7 +38,15 @@ const locks=globals.studioLocks ||=new Map();
 export async function locked<T>(id:string,task:()=>Promise<T>):Promise<T>{const previous=locks.get(id)||Promise.resolve();const next=previous.catch(()=>{}).then(task);locks.set(id,next);try{return await next;}finally{if(locks.get(id)===next)locks.delete(id);}}
 export async function git(id:string,args:string[]){return (await exec('git',['-c','core.hooksPath=/dev/null',...args],{cwd:workspace(id),timeout:30000,maxBuffer:8*1024*1024})).stdout.trim();}
 export async function tree(p:Project){await git(p.id,['add','-A']);return git(p.id,['write-tree']);}
-export function requireStep(p:Project,allowed:Project['workflow'][]){if(p.status==='running'||!allowed.includes(p.workflow))throw new AppError('INVALID_STEP','请先完成当前步骤，不能跳过前面的确认',409);}
+export function requireActive(p:Project){if(p.archivedAt)throw new AppError('PROJECT_ARCHIVED','项目已归档，请先恢复到项目记录后继续开发',409);}
+export function requireStep(p:Project,allowed:Project['workflow'][]){requireActive(p);if(p.status==='running'||!allowed.includes(p.workflow))throw new AppError('INVALID_STEP','请先完成当前步骤，不能跳过前面的确认',409);}
+export async function setArchived(p:Project,archived:boolean){
+ if(p.status==='running'||p.job)throw new AppError('PROJECT_RUNNING','项目任务正在运行，请先暂停当前步骤或等待完成后再归档',409);
+ if(Boolean(p.archivedAt)===archived)throw new AppError('STALE_ARCHIVE',archived?'项目已归档，请刷新列表':'项目已恢复，请刷新列表',409);
+ p.archivedAt=archived?new Date().toISOString():null;
+ activity(p,archived?'项目已归档':'项目已恢复到项目记录',`保留第 ${p.round} 轮的进度、文档和书签；继续开发仍需按步骤确认。`,'success');
+ await save(p);return p;
+}
 export function checkRevision(p:Project,revision:number){if(p.revision!==revision)throw new AppError('STALE_STATE','项目已更新，请刷新后再操作',409);}
 export function planPath(p:Project){return path.join(workspace(p.id),`docs/阶段文档/第${p.round}轮-开发方案.md`);}
 export async function createProject(filename:string,prd:string):Promise<Project>{
