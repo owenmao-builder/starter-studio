@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+.studio/
+*.tsbuildinfo
+.DS_Store
+coverage/
+
+.pages-build/
+out/
