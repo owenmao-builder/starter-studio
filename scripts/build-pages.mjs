@@ -9,7 +9,7 @@ for(const file of ['package.json','tsconfig.json','next-env.d.ts'])await fs.copy
 for(const file of ['page.tsx','layout.tsx','globals.css'])await fs.copyFile(path.join(root,'app',file),path.join(stage,'app',file));
 for(const dir of ['components','public'])await fs.cp(path.join(root,dir),path.join(stage,dir),{recursive:true});
 await fs.mkdir(path.join(stage,'lib'));
-for(const file of ['api.ts','types.ts','preview-api.ts'])await fs.copyFile(path.join(root,'lib',file),path.join(stage,'lib',file));
+for(const file of ['api.ts','types.ts','preview-api.ts','navigation.ts'])await fs.copyFile(path.join(root,'lib',file),path.join(stage,'lib',file));
 await fs.symlink(path.join(root,'node_modules'),path.join(stage,'node_modules'),'dir');
 const basePath=process.env.PAGES_BASE_PATH||'/starter-studio';
 if(!/^\/[a-zA-Z0-9_-]+$/.test(basePath))throw new Error('PAGES_BASE_PATH must be a single safe path segment');
